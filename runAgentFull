@@ -1,0 +1,100 @@
+import neat
+import pickle
+import gymnasium as gym
+import numpy as np
+import time
+from tetris_gymnasium.envs import Tetris
+import pygame
+import sys
+
+import cv2
+def load_winner(config_path="config-tetris-neat.ini", winner_path="savingCheck.pkl", pop = True):
+    config = neat.Config(
+        neat.DefaultGenome,
+        neat.DefaultReproduction,
+        neat.DefaultSpeciesSet,
+        neat.DefaultStagnation,
+        config_path,
+    )
+
+    if(pop == True):
+        with open(winner_path, "rb") as f:
+            population = pickle.load(f)
+            winner = population.best_genome
+    else:    
+        with open(winner_path, "rb") as f:
+            winner = pickle.load(f)
+
+    net = neat.nn.FeedForwardNetwork.create(winner, config)
+    return net
+
+def obs_to_input(obs):
+    board = obs["board"]
+    rows, cols = board.shape
+
+    col_heights = np.array([
+        rows - np.argmax(board[:, c] > 0) if np.any(board[:, c] > 0) else 0
+        for c in range(cols)
+    ], dtype=np.float32)
+
+    holes = np.array([
+        sum(1 for r in range(rows) if board[r, c] == 0 and np.any(board[:r, c] > 0))
+        for c in range(cols)
+    ], dtype=np.float32)
+
+    
+    aggregate_height = np.sum(col_heights)
+
+    bumpiness = np.sum(np.abs(np.diff(col_heights)))
+
+
+    active = obs["active_tetromino_mask"].flatten()[:7]
+
+
+    queue = obs["queue"].flatten()[:7]
+
+
+    holder = obs["holder"].flatten()[:7]
+
+    return np.concatenate([
+        col_heights,
+        holes,
+        [aggregate_height, bumpiness],
+        active,
+        queue,
+        holder
+    ]).astype(np.float32)
+
+
+def run_winner_episode(env, net, render=True, delay=0.2):
+    obs, info = env.reset(seed = 42)
+    total_reward = 0
+    terminated = False
+    truncated = False
+
+    while not terminated and not truncated:
+        
+        inputs = obs_to_input(obs)
+        outputs = net.activate(inputs)
+        action = int(np.argmax(outputs))
+        action = np.clip(action, 0, env.action_space.n - 1)
+
+        obs, reward, terminated, truncated, info = env.step(action)
+        total_reward += reward
+
+        # --- Render ---
+        if render:
+            env.render()  # updates OpenCV window
+            # Must include waitKey for OpenCV window to refresh
+            if cv2.waitKey(int(delay * 1000)) & 0xFF == 27:  # escape key to quit
+                break
+
+    return total_reward
+if __name__ == "__main__":
+    env = gym.make("tetris_gymnasium/Tetris", render_mode="human")
+    net = load_winner()
+
+    score = run_winner_episode(env, net, render=True, delay=0.2)
+    print("Winner Score:", score)
+
+    env.close()
